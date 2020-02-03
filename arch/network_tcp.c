@@ -249,6 +249,10 @@ ServerNetworkLayerTCP_add(UA_ServerNetworkLayer *nl, ServerNetworkLayerTCP *laye
 
     /* Add to the linked list */
     LIST_INSERT_HEAD(&layer->connections, e, pointers);
+    if(nl->statistics) {
+        nl->statistics->currentConnectionCount++;
+        nl->statistics->cumulatedConnectionCount++;
+    }
     return UA_STATUSCODE_GOOD;
 }
 
@@ -454,6 +458,10 @@ ServerNetworkLayerTCP_listen(UA_ServerNetworkLayer *nl, UA_Server *server,
             LIST_REMOVE(e, pointers);
             UA_close(e->connection.sockfd);
             UA_Server_removeConnection(server, &e->connection);
+            if(nl->statistics) {
+                nl->statistics->connectionTimeoutCount--;
+                nl->statistics->currentConnectionCount--;
+            }
             continue;
         }
 
@@ -480,6 +488,9 @@ ServerNetworkLayerTCP_listen(UA_ServerNetworkLayer *nl, UA_Server *server,
             LIST_REMOVE(e, pointers);
             UA_close(e->connection.sockfd);
             UA_Server_removeConnection(server, &e->connection);
+            if(nl->statistics) {
+                nl->statistics->currentConnectionCount--;
+            }
         }
     }
     return UA_STATUSCODE_GOOD;
@@ -523,6 +534,9 @@ ServerNetworkLayerTCP_deleteMembers(UA_ServerNetworkLayer *nl) {
         LIST_REMOVE(e, pointers);
         UA_close(e->connection.sockfd);
         UA_free(e);
+        if(nl->statistics) {
+            nl->statistics->currentConnectionCount--;
+        }
     }
 
     /* Free the layer */
@@ -786,7 +800,7 @@ UA_ClientConnectionTCP_init(UA_ConnectionConfig config, const UA_String endpoint
     if (port == 0) {
             port = 4840;
             UA_LOG_INFO(logger, UA_LOGCATEGORY_NETWORK,
-                            "No port defined, using default port %d", port);
+                            "No port defined, using default port %" PRIu16, port);
     }
 
     memset(&tcpClientConnection->hints, 0, sizeof(tcpClientConnection->hints));
@@ -841,7 +855,7 @@ UA_ClientConnectionTCP(UA_ConnectionConfig config, const UA_String endpointUrl,
     if(port == 0) {
         port = 4840;
         UA_LOG_INFO(logger, UA_LOGCATEGORY_NETWORK,
-                    "No port defined, using default port %d", port);
+                    "No port defined, using default port %" PRIu16, port);
     }
 
     struct addrinfo hints, *server;

@@ -22,7 +22,6 @@
 #include <open62541/types_generated_handling.h>
 #include "open62541/plugin/network.h"
 
-#include "ua_securechannel_manager.h"
 #include "ua_server_internal.h"
 #include "ua_services.h"
 
@@ -348,7 +347,7 @@ processOPN(UA_Server *server, UA_SecureChannel *channel,
         UA_NodeId_clear(&requestType);
         UA_LOG_WARNING_CHANNEL(&server->config.logger, channel,
                                "Could not decode the NodeId. Closing the connection");
-        UA_SecureChannelManager_close(&server->secureChannelManager, channel->securityToken.channelId);
+        UA_Server_closeSecureChannel(server, channel, UA_DIAGNOSTICEVENT_REJECT);
         return retval;
     }
     retval = UA_OpenSecureChannelRequest_decodeBinary(msg, &offset, &openSecureChannelRequest);
@@ -360,7 +359,7 @@ processOPN(UA_Server *server, UA_SecureChannel *channel,
         UA_OpenSecureChannelRequest_clear(&openSecureChannelRequest);
         UA_LOG_WARNING_CHANNEL(&server->config.logger, channel,
                                "Could not decode the OPN message. Closing the connection.");
-        UA_SecureChannelManager_close(&server->secureChannelManager, channel->securityToken.channelId);
+        UA_Server_closeSecureChannel(server, channel, UA_DIAGNOSTICEVENT_REJECT);
         return retval;
     }
     UA_NodeId_clear(&requestType);
@@ -373,8 +372,7 @@ processOPN(UA_Server *server, UA_SecureChannel *channel,
     if(openScResponse.responseHeader.serviceResult != UA_STATUSCODE_GOOD) {
         UA_LOG_WARNING_CHANNEL(&server->config.logger, channel, "Could not open a SecureChannel. "
                                "Closing the connection.");
-        UA_SecureChannelManager_close(&server->secureChannelManager,
-                                      channel->securityToken.channelId);
+        UA_Server_closeSecureChannel(server, channel, UA_DIAGNOSTICEVENT_REJECT);
         return openScResponse.responseHeader.serviceResult;
     }
 
@@ -386,8 +384,7 @@ processOPN(UA_Server *server, UA_SecureChannel *channel,
         UA_LOG_WARNING_CHANNEL(&server->config.logger, channel,
                                "Could not send the OPN answer with error code %s",
                                UA_StatusCode_name(retval));
-        UA_SecureChannelManager_close(&server->secureChannelManager,
-                                      channel->securityToken.channelId);
+        UA_Server_closeSecureChannel(server, channel, UA_DIAGNOSTICEVENT_REJECT);
     }
 
     return retval;
@@ -426,8 +423,7 @@ decryptProcessOPN(UA_Server *server, UA_SecureChannel *channel,
     }
 
     if(channel->state < UA_SECURECHANNELSTATE_OPEN) {
-        retval = UA_SecureChannelManager_config(&server->secureChannelManager,
-                                                channel, &asymHeader);
+        retval = UA_Server_configSecureChannel(server, channel, &asymHeader);
         if(retval != UA_STATUSCODE_GOOD) {
             UA_AsymmetricAlgorithmSecurityHeader_clear(&asymHeader);
             return retval;
@@ -554,7 +550,7 @@ processMSGDecoded(UA_Server *server, UA_SecureChannel *channel, UA_UInt32 reques
                                    requestType->typeName);
 #else
             UA_LOG_WARNING_CHANNEL(&server->config.logger, channel,
-                                   "Service %i refused without a valid session",
+                                   "Service %" PRIi16 " refused without a valid session",
                                    requestType->binaryEncodingId);
 #endif
             return sendServiceFaultWithRequest(channel, requestHeader, responseType,
@@ -577,11 +573,12 @@ processMSGDecoded(UA_Server *server, UA_SecureChannel *channel, UA_UInt32 reques
                                requestType->typeName);
 #else
         UA_LOG_WARNING_SESSION(&server->config.logger, session,
-                               "Service %i refused on a non-activated session",
+                               "Service %" PRIi16 " refused on a non-activated session",
                                requestType->binaryEncodingId);
 #endif
         UA_LOCK(server->serviceMutex);
-        UA_Server_removeSessionByToken(server, &session->header.authenticationToken);
+        UA_Server_removeSessionByToken(server, &session->header.authenticationToken,
+                                       UA_DIAGNOSTICEVENT_ABORT);
         UA_UNLOCK(server->serviceMutex);
         return sendServiceFaultWithRequest(channel, requestHeader, responseType,
                                            requestId, UA_STATUSCODE_BADSESSIONNOTACTIVATED);
@@ -656,7 +653,7 @@ processMSG(UA_Server *server, UA_SecureChannel *channel,
                                 "but those are not enabled in the build");
         } else {
             UA_LOG_INFO_CHANNEL(&server->config.logger, channel,
-                                "Unknown request with type identifier %i",
+                                "Unknown request with type identifier %" PRIi32,
                                 requestTypeId.identifier.numeric);
         }
         return sendServiceFault(channel, msg, requestPos, &UA_TYPES[UA_TYPES_SERVICEFAULT],
@@ -736,7 +733,7 @@ processSecureChannelMessage(void *application, UA_SecureChannel *channel,
         break;
     case UA_MESSAGETYPE_CLO:
         UA_LOG_TRACE_CHANNEL(&server->config.logger, channel, "Process a CLO");
-        Service_CloseSecureChannel(server, channel);
+        Service_CloseSecureChannel(server, channel); /* Regular close */
         break;
     default:
         UA_LOG_TRACE_CHANNEL(&server->config.logger, channel, "Invalid message type");
@@ -744,19 +741,32 @@ processSecureChannelMessage(void *application, UA_SecureChannel *channel,
         break;
     }
     if(retval != UA_STATUSCODE_GOOD) {
-        if(channel->connection) {
-            UA_LOG_INFO_CHANNEL(&server->config.logger, channel,
-                                "Processing the message failed with StatusCode %s. "
-                                "Closing the channel.", UA_StatusCode_name(retval));
-            UA_TcpErrorMessage errMsg;
-            UA_TcpErrorMessage_init(&errMsg);
-            errMsg.error = retval;
-            UA_Connection_sendError(channel->connection, &errMsg);
-            Service_CloseSecureChannel(server, channel);
-        } else {
+        if(!channel->connection) {
             UA_LOG_INFO_CHANNEL(&server->config.logger, channel,
                                 "Processing the message failed. Channel already closed "
                                 "with StatusCode %s. ", UA_StatusCode_name(retval));
+            return;
+        }
+
+        UA_LOG_INFO_CHANNEL(&server->config.logger, channel,
+                            "Processing the message failed with StatusCode %s. "
+                            "Closing the channel.", UA_StatusCode_name(retval));
+        UA_TcpErrorMessage errMsg;
+        UA_TcpErrorMessage_init(&errMsg);
+        errMsg.error = retval;
+        UA_Connection_sendError(channel->connection, &errMsg);
+        switch(retval) {
+        case UA_STATUSCODE_BADSECURITYMODEREJECTED:
+        case UA_STATUSCODE_BADSECURITYCHECKSFAILED:
+        case UA_STATUSCODE_BADSECURECHANNELIDINVALID:
+        case UA_STATUSCODE_BADSECURECHANNELTOKENUNKNOWN:
+        case UA_STATUSCODE_BADSECURITYPOLICYREJECTED:
+        case UA_STATUSCODE_BADCERTIFICATEUSENOTALLOWED:
+            UA_Server_closeSecureChannel(server, channel, UA_DIAGNOSTICEVENT_SECURITYREJECT);
+            break;
+        default:
+            UA_Server_closeSecureChannel(server, channel, UA_DIAGNOSTICEVENT_CLOSE);
+            break;
         }
     }
 }
@@ -773,7 +783,7 @@ UA_Server_processBinaryMessage(UA_Server *server, UA_Connection *connection,
 
     /* Add a SecureChannel to a new connection */
     if(!channel) {
-        retval = UA_SecureChannelManager_create(&server->secureChannelManager, connection);
+        retval = UA_Server_createSecureChannel(server, connection);
         if(retval != UA_STATUSCODE_GOOD)
             goto error;
         channel = connection->channel;
