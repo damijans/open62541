@@ -2,6 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. 
  *
+ *    Copyright 2020 (c) Fraunhofer IOSB (Author: Andreas Ebner)
  *    Copyright 2014-2017 (c) Fraunhofer IOSB (Author: Julius Pfrommer)
  *    Copyright 2014, 2016-2017 (c) Florian Palm
  *    Copyright 2014-2016 (c) Sten Grüner
@@ -19,9 +20,10 @@
 #include <open62541/types_generated_handling.h>
 
 #include "ua_util_internal.h"
-
 #include "libc_time.h"
 #include "pcg_basic.h"
+
+#define UA_MAX_ARRAY_DIMS 100 /* Max dimensions of an array */
 
 /* Datatype Handling
  * -----------------
@@ -152,6 +154,12 @@ QualifiedName_copy(const UA_QualifiedName *src, UA_QualifiedName *dst, const UA_
 static void
 QualifiedName_clear(UA_QualifiedName *p, const UA_DataType *_) {
     String_clear(&p->name, NULL);
+}
+
+u32
+UA_QualifiedName_hash(const UA_QualifiedName *q) {
+    return UA_ByteString_hash(q->namespaceIndex,
+                              q->name.data, q->name.length);
 }
 
 UA_Boolean
@@ -618,6 +626,11 @@ computeStrides(const UA_Variant *v, const UA_NumericRange range,
     }
     UA_assert(dims_count > 0);
 
+    /* Upper bound of the dimensions for stack-allocation */
+    if(dims_count > UA_MAX_ARRAY_DIMS)
+        return UA_STATUSCODE_BADINTERNALERROR;
+    UA_UInt32 realmax[UA_MAX_ARRAY_DIMS];
+
     /* Test the integrity of the range and compute the max index used for every
      * dimension. The standard says in Part 4, Section 7.22:
      *
@@ -625,7 +638,6 @@ computeStrides(const UA_Variant *v, const UA_NumericRange range,
      * the bounds of the array. The Server shall return a partial result if some
      * elements exist within the range. */
     size_t count = 1;
-    UA_STACKARRAY(UA_UInt32, realmax, dims_count);
     if(range.dimensionsSize != dims_count)
         return UA_STATUSCODE_BADINDEXRANGENODATA;
     for(size_t i = 0; i < dims_count; ++i) {
@@ -997,31 +1009,71 @@ copyStructure(const void *src, void *dst, const UA_DataType *type) {
     uintptr_t ptrd = (uintptr_t)dst;
     const UA_DataType *typelists[2] = { UA_TYPES, &type[-type->typeIndex] };
     for(size_t i = 0; i < type->membersSize; ++i) {
-        const UA_DataTypeMember *m= &type->members[i];
+        const UA_DataTypeMember *m = &type->members[i];
         const UA_DataType *mt = &typelists[!m->namespaceZero][m->memberTypeIndex];
-        if(!m->isArray) {
-            ptrs += m->padding;
-            ptrd += m->padding;
-            retval |= copyJumpTable[mt->typeKind]((const void*)ptrs, (void*)ptrd, mt);
-            ptrs += mt->memSize;
-            ptrd += mt->memSize;
+        ptrs += m->padding;
+        ptrd += m->padding;
+        if(!m->isOptional) {
+            if(!m->isArray) {
+                retval |= copyJumpTable[mt->typeKind]((const void *)ptrs, (void *)ptrd, mt);
+                ptrs += mt->memSize;
+                ptrd += mt->memSize;
+            } else {
+                size_t *dst_size = (size_t*)ptrd;
+                const size_t size = *((const size_t*)ptrs);
+                ptrs += sizeof(size_t);
+                ptrd += sizeof(size_t);
+                retval |= UA_Array_copy(*(void* const*)ptrs, size, (void**)ptrd, mt);
+                if(retval == UA_STATUSCODE_GOOD)
+                    *dst_size = size;
+                else
+                    *dst_size = 0;
+                ptrs += sizeof(void*);
+                ptrd += sizeof(void*);
+            }
         } else {
-            ptrs += m->padding;
-            ptrd += m->padding;
-            size_t *dst_size = (size_t*)ptrd;
-            const size_t size = *((const size_t*)ptrs);
-            ptrs += sizeof(size_t);
-            ptrd += sizeof(size_t);
-            retval |= UA_Array_copy(*(void* const*)ptrs, size, (void**)ptrd, mt);
-            if(retval == UA_STATUSCODE_GOOD)
-                *dst_size = size;
-            else
-                *dst_size = 0;
+            if(!m->isArray) {
+                if(*(void* const*)ptrs != NULL)
+                    retval |= UA_Array_copy(*(void* const*)ptrs, 1, (void**)ptrd, mt);
+            } else {
+                if(*(void* const*)(ptrs+sizeof(size_t)) != NULL) {
+                    size_t *dst_size = (size_t*)ptrd;
+                    const size_t size = *((const size_t*)ptrs);
+                    ptrs += sizeof(size_t);
+                    ptrd += sizeof(size_t);
+                    retval |= UA_Array_copy(*(void* const*)ptrs, size, (void**)ptrd, mt);
+                    if(retval == UA_STATUSCODE_GOOD)
+                        *dst_size = size;
+                    else
+                        *dst_size = 0;
+                } else {
+                    ptrs += sizeof(size_t);
+                    ptrd += sizeof(size_t);
+                }
+            }
             ptrs += sizeof(void*);
             ptrd += sizeof(void*);
         }
     }
     return retval;
+}
+
+static UA_StatusCode
+copyUnion(const void *src, void *dst, const UA_DataType *type) {
+    uintptr_t ptrs = (uintptr_t) src;
+    uintptr_t ptrd = (uintptr_t) dst;
+    UA_UInt32 selection = *(UA_UInt32 *)ptrs;
+    UA_copy((const UA_UInt32 *) ptrs, (UA_UInt32 *) ptrd, &UA_TYPES[UA_TYPES_UINT32]);
+    if(selection == 0)
+        return UA_STATUSCODE_GOOD;
+    const UA_DataType *typelists[2] = { UA_TYPES, &type[-type->typeIndex] };
+    const UA_DataTypeMember *m = &type->members[selection-1];
+    const UA_DataType *mt = &typelists[!m->namespaceZero][m->memberTypeIndex];
+    ptrs += UA_TYPES[UA_TYPES_UINT32].memSize;
+    ptrd += UA_TYPES[UA_TYPES_UINT32].memSize;
+    ptrs += m->padding;
+    ptrd += m->padding;
+    return UA_copy((const void *) ptrs, (void *) ptrd, mt);
 }
 
 static UA_StatusCode
@@ -1058,8 +1110,8 @@ const UA_copySignature copyJumpTable[UA_DATATYPEKINDS] = {
     (UA_copySignature)copyNotImplemented, /* Decimal */
     (UA_copySignature)copy4Byte, /* Enumeration */
     (UA_copySignature)copyStructure,
-    (UA_copySignature)copyNotImplemented, /* Structure with Optional Fields */
-    (UA_copySignature)copyNotImplemented, /* Union */
+    (UA_copySignature)copyStructure, /* Structure with Optional Fields */
+    (UA_copySignature)copyUnion, /* Union */
     (UA_copySignature)copyNotImplemented /* BitfieldCluster*/
 };
 
@@ -1079,18 +1131,51 @@ clearStructure(void *p, const UA_DataType *type) {
     for(size_t i = 0; i < type->membersSize; ++i) {
         const UA_DataTypeMember *m = &type->members[i];
         const UA_DataType *mt = &typelists[!m->namespaceZero][m->memberTypeIndex];
-        if(!m->isArray) {
-            ptr += m->padding;
-            clearJumpTable[mt->typeKind]((void*)ptr, mt);
-            ptr += mt->memSize;
-        } else {
-            ptr += m->padding;
-            size_t length = *(size_t*)ptr;
-            ptr += sizeof(size_t);
-            UA_Array_delete(*(void**)ptr, length, mt);
-            ptr += sizeof(void*);
+        ptr += m->padding;
+        if(!m->isOptional) {
+            if(!m->isArray) {
+                clearJumpTable[mt->typeKind]((void*)ptr, mt);
+                ptr += mt->memSize;
+            } else {
+                size_t length = *(size_t*)ptr;
+                ptr += sizeof(size_t);
+                UA_Array_delete(*(void**)ptr, length, mt);
+                ptr += sizeof(void*);
+            }
+        } else { /* field is optional */
+            if(!m->isArray) {
+                /* optional scalar field is contained */
+                if((*(void *const *)ptr != NULL))
+                    UA_Array_delete(*(void **)ptr, 1, mt);
+                ptr += sizeof(void *);
+            } else {
+                /* optional array field is contained */
+                if((*(void *const *)(ptr + sizeof(size_t)) != NULL)) {
+                    size_t length = *(size_t *)ptr;
+                    ptr += sizeof(size_t);
+                    UA_Array_delete(*(void **)ptr, length, mt);
+                    ptr += sizeof(void *);
+                } else { /* optional array field not contained */
+                    ptr += sizeof(size_t);
+                    ptr += sizeof(void *);
+                }
+            }
         }
     }
+}
+
+static void
+clearUnion(void *p, const UA_DataType *type) {
+    uintptr_t ptr = (uintptr_t) p;
+    UA_UInt32 selection = *(UA_UInt32 *)ptr;
+    if(selection == 0)
+        return;
+    const UA_DataType *typelists[2] = { UA_TYPES, &type[-type->typeIndex] };
+    const UA_DataTypeMember *m = &type->members[selection-1];
+    const UA_DataType *mt = &typelists[!m->namespaceZero][m->memberTypeIndex];
+    ptr += UA_TYPES[UA_TYPES_UINT32].memSize;
+    ptr += m->padding;
+    UA_clear((void *) ptr, mt);
 }
 
 static void nopClear(void *p, const UA_DataType *type) { }
@@ -1125,8 +1210,8 @@ UA_clearSignature clearJumpTable[UA_DATATYPEKINDS] = {
     (UA_clearSignature)nopClear, /* Decimal, not implemented */
     (UA_clearSignature)nopClear, /* Enumeration */
     (UA_clearSignature)clearStructure,
-    (UA_clearSignature)nopClear, /* Struct with Optional Fields, not implemented*/
-    (UA_clearSignature)nopClear, /* Union, not implemented*/
+    (UA_clearSignature)clearStructure, /* Struct with Optional Fields*/
+    (UA_clearSignature)clearUnion, /* Union*/
     (UA_clearSignature)nopClear /* BitfieldCluster, not implemented*/
 };
 
@@ -1242,7 +1327,7 @@ readDimension(UA_Byte *buf, size_t buflen, UA_NumericRangeDimension *dim) {
 }
 
 UA_StatusCode
-UA_NumericRange_parseFromString(UA_NumericRange *range, const UA_String *str) {
+UA_NumericRange_parse(UA_NumericRange *range, const UA_String str) {
     size_t idx = 0;
     size_t dimensionsMax = 0;
     UA_NumericRangeDimension *dimensions = NULL;
@@ -1263,7 +1348,7 @@ UA_NumericRange_parseFromString(UA_NumericRange *range, const UA_String *str) {
         }
 
         /* read the dimension */
-        size_t progress = readDimension(&str->data[offset], str->length - offset,
+        size_t progress = readDimension(&str.data[offset], str.length - offset,
                                         &dimensions[idx]);
         if(progress == 0) {
             retval = UA_STATUSCODE_BADINDEXRANGEINVALID;
@@ -1273,10 +1358,10 @@ UA_NumericRange_parseFromString(UA_NumericRange *range, const UA_String *str) {
         ++idx;
 
         /* loop into the next dimension */
-        if(offset >= str->length)
+        if(offset >= str.length)
             break;
 
-        if(str->data[offset] != ',') {
+        if(str.data[offset] != ',') {
             retval = UA_STATUSCODE_BADINDEXRANGEINVALID;
             break;
         }

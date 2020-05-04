@@ -6,6 +6,7 @@
  *    Copyright 2017 (c) Stefan Profanter, fortiss GmbH
  *    Copyright 2017 (c) Henrik Norrman
  *    Copyright 2018 (c) Fabian Arndt, Root-Core
+ *    Copyright 2019 (c) HMS Industrial Networks AB (Author: Jonas Green)
  */
 
 #ifndef UA_SERVER_CONFIG_H_
@@ -155,7 +156,7 @@ struct UA_ServerConfig {
 #if UA_MULTITHREADING >= 100
     UA_Double asyncOperationTimeout; /* in ms, 0 => unlimited */
     size_t maxAsyncOperationQueueSize; /* 0 => unlimited */
-    UA_Double asyncCallRequestTimeout UA_DEPRECATED; /* in ms, 0 => unlimited */
+    UA_DEPRECATED UA_Double asyncCallRequestTimeout; /* in ms, 0 => unlimited */
     /* Notify workers when an async operation was enqueued */
     UA_Server_AsyncOperationNotifyCallback asyncOperationNotifyCallback;
 #endif

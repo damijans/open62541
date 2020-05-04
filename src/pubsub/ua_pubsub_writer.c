@@ -162,6 +162,22 @@ UA_Server_addWriterGroup(UA_Server *server, const UA_NodeId connection,
         return UA_STATUSCODE_BADCONFIGURATIONERROR;
     }
 
+    /* Validate messageSettings type */
+    if (writerGroupConfig->messageSettings.content.decoded.type) {
+        if (writerGroupConfig->encodingMimeType == UA_PUBSUB_ENCODING_JSON &&
+                (writerGroupConfig->messageSettings.encoding != UA_EXTENSIONOBJECT_DECODED
+                || writerGroupConfig->messageSettings.content.decoded.type->typeIndex != UA_TYPES_JSONWRITERGROUPMESSAGEDATATYPE) ) {
+            return UA_STATUSCODE_BADTYPEMISMATCH;
+        }
+
+        if (writerGroupConfig->encodingMimeType == UA_PUBSUB_ENCODING_UADP &&
+                (writerGroupConfig->messageSettings.encoding != UA_EXTENSIONOBJECT_DECODED
+                        || writerGroupConfig->messageSettings.content.decoded.type->typeIndex != UA_TYPES_UADPWRITERGROUPMESSAGEDATATYPE) ) {
+            return UA_STATUSCODE_BADTYPEMISMATCH;
+        }    
+    }
+
+
     //allocate memory for new WriterGroup
     UA_WriterGroup *newWriterGroup = (UA_WriterGroup *) UA_calloc(1, sizeof(UA_WriterGroup));
     if(!newWriterGroup)
@@ -233,7 +249,7 @@ UA_Server_freezeWriterGroupConfiguration(UA_Server *server, const UA_NodeId writ
         return UA_STATUSCODE_BADNOTFOUND;
 
     //PubSubConnection freezeCounter++
-    UA_PubSubConnection *pubSubConnection =  wg->linkedConnection;;
+    UA_PubSubConnection *pubSubConnection =  wg->linkedConnection;
     pubSubConnection->configurationFreezeCounter++;
     pubSubConnection->config->configurationFrozen = UA_TRUE;
     //WriterGroup freeze
@@ -355,7 +371,7 @@ UA_Server_unfreezeWriterGroupConfiguration(UA_Server *server, const UA_NodeId wr
     //    return UA_STATUSCODE_BADCONFIGURATIONERROR;
     //}
     //PubSubConnection freezeCounter--
-    UA_PubSubConnection *pubSubConnection =  wg->linkedConnection;;
+    UA_PubSubConnection *pubSubConnection =  wg->linkedConnection;
     pubSubConnection->configurationFreezeCounter--;
     if(pubSubConnection->configurationFreezeCounter == 0){
         pubSubConnection->config->configurationFrozen = UA_FALSE;
@@ -527,14 +543,15 @@ generateFieldMetaData(UA_Server *server, UA_DataSetField *field, UA_FieldMetaDat
 
             //ToDo after freeze PR, the value source must be checked (other behavior for static value source)
             if(field->config.field.variable.staticValueSourceEnabled) {
-                fieldMetaData->arrayDimensions = (UA_UInt32 *)
-                    UA_calloc(field->config.field.variable.staticValueSource.value.arrayDimensionsSize,
-                              sizeof(UA_UInt32));
-                if(fieldMetaData->arrayDimensions == NULL)
-                    return UA_STATUSCODE_BADOUTOFMEMORY;
-                memcpy(fieldMetaData->arrayDimensions,
-                       field->config.field.variable.staticValueSource.value.arrayDimensions,
-                       sizeof(UA_UInt32) *field->config.field.variable.staticValueSource.value.arrayDimensionsSize);
+                if (field->config.field.variable.staticValueSource.value.arrayDimensionsSize > 0) {
+                    fieldMetaData->arrayDimensions = (UA_UInt32 *) UA_calloc(
+                            field->config.field.variable.staticValueSource.value.arrayDimensionsSize, sizeof(UA_UInt32));
+                    if(fieldMetaData->arrayDimensions == NULL)
+                        return UA_STATUSCODE_BADOUTOFMEMORY;
+                    memcpy(fieldMetaData->arrayDimensions,
+                            field->config.field.variable.staticValueSource.value.arrayDimensions,
+                            sizeof(UA_UInt32) *field->config.field.variable.staticValueSource.value.arrayDimensionsSize);
+                }
                 fieldMetaData->arrayDimensionsSize = field->config.field.variable.staticValueSource.value.arrayDimensionsSize;
                 if(UA_NodeId_copy(&field->config.field.variable.staticValueSource.value.type->typeId,
                         &fieldMetaData->dataType) != UA_STATUSCODE_GOOD){
@@ -556,10 +573,12 @@ generateFieldMetaData(UA_Server *server, UA_DataSetField *field, UA_FieldMetaDat
                 UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
                                "PubSub meta data generation. Reading ArrayDimension failed.");
             } else {
-                fieldMetaData->arrayDimensions = (UA_UInt32 *) UA_calloc(value.arrayDimensionsSize, sizeof(UA_UInt32));
-                if(fieldMetaData->arrayDimensions == NULL)
-                    return UA_STATUSCODE_BADOUTOFMEMORY;
-                memcpy(fieldMetaData->arrayDimensions, value.arrayDimensions, sizeof(UA_UInt32)*value.arrayDimensionsSize);
+                if (value.arrayDimensionsSize > 0) {
+                    fieldMetaData->arrayDimensions = (UA_UInt32 *) UA_calloc(value.arrayDimensionsSize, sizeof(UA_UInt32));
+                    if(fieldMetaData->arrayDimensions == NULL)
+                        return UA_STATUSCODE_BADOUTOFMEMORY;
+                    memcpy(fieldMetaData->arrayDimensions, value.arrayDimensions, sizeof(UA_UInt32)*value.arrayDimensionsSize);
+                }
                 fieldMetaData->arrayDimensionsSize = value.arrayDimensionsSize;
             }
             if(UA_Server_readDataType(server, field->config.field.variable.publishParameters.publishedVariable,
@@ -1025,10 +1044,10 @@ UA_WriterGroupConfig_clear(UA_WriterGroupConfig *writerGroupConfig){
     UA_String_clear(&writerGroupConfig->name);
     UA_ExtensionObject_clear(&writerGroupConfig->transportSettings);
     UA_ExtensionObject_clear(&writerGroupConfig->messageSettings);
-    for(size_t i = 0; i < writerGroupConfig->groupPropertiesSize; i++){
-        UA_KeyValuePair_clear(&writerGroupConfig->groupProperties[i]);
-    }
-    UA_free(writerGroupConfig->groupProperties);
+    UA_Array_delete(writerGroupConfig->groupProperties,
+                    writerGroupConfig->groupPropertiesSize,
+                    &UA_TYPES[UA_TYPES_KEYVALUEPAIR]);
+    writerGroupConfig->groupProperties = NULL;
 }
 
 static void

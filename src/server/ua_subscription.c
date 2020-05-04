@@ -14,6 +14,7 @@
  *    Copyright 2017 (c) Ari Breitkreuz, fortiss GmbH
  *    Copyright 2017 (c) Mattias Bornhager
  *    Copyright 2018 (c) Hilscher Gesellschaft für Systemautomation mbH (Author: Martin Lang)
+ *    Copyright 2019 (c) HMS Industrial Networks AB (Author: Jonas Green)
  */
 
 #include "ua_server_internal.h"
@@ -512,8 +513,13 @@ UA_Subscription_publish(UA_Server *server, UA_Subscription *sub) {
     sub->currentKeepAliveCount = 0;
 
     /* Free the response */
-    UA_Array_delete(response->results, response->resultsSize, &UA_TYPES[UA_TYPES_UINT32]);
-    UA_free(pre); /* No need for UA_PublishResponse_clear */
+    if(retransmission)
+        /* NotificationMessage was moved into retransmission queue */
+        UA_NotificationMessage_init(&response->notificationMessage);
+    response->availableSequenceNumbers = NULL;
+    response->availableSequenceNumbersSize = 0;
+    UA_PublishResponse_clear(&pre->response);
+    UA_free(pre);
 
     /* Repeat sending responses if there are more notifications to send */
     if(moreNotifications)

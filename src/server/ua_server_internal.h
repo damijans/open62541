@@ -11,6 +11,7 @@
  *    Copyright 2016-2017 (c) Stefan Profanter, fortiss GmbH
  *    Copyright 2017 (c) Julian Grothoff
  *    Copyright 2019 (c) Kalycito Infotech Private Limited
+ *    Copyright 2019 (c) HMS Industrial Networks AB (Author: Jonas Green)
  */
 
 #ifndef UA_SERVER_INTERNAL_H_
@@ -44,6 +45,101 @@ _UA_BEGIN_DECLS
 
 #ifdef UA_ENABLE_SUBSCRIPTIONS
 #include "ua_subscription.h"
+
+/* Unions that represent any of the supported request or response message */
+typedef union {
+    UA_RequestHeader requestHeader;
+    UA_FindServersRequest findServersRequest;
+    UA_GetEndpointsRequest getEndpointsRequest;
+#ifdef UA_ENABLE_DISCOVERY
+# ifdef UA_ENABLE_DISCOVERY_MULTICAST
+    UA_FindServersOnNetworkRequest findServersOnNetworkRequest;
+# endif
+    UA_RegisterServerRequest registerServerRequest;
+    UA_RegisterServer2Request registerServer2Request;
+#endif
+    UA_OpenSecureChannelRequest openSecureChannelRequest;
+    UA_CreateSessionRequest createSessionRequest;
+    UA_ActivateSessionRequest activateSessionRequest;
+    UA_CloseSessionRequest closeSessionRequest;
+    UA_AddNodesRequest addNodesRequest;
+    UA_AddReferencesRequest addReferencesRequest;
+    UA_DeleteNodesRequest deleteNodesRequest;
+    UA_DeleteReferencesRequest deleteReferencesRequest;
+    UA_BrowseRequest browseRequest;
+    UA_BrowseNextRequest browseNextRequest;
+    UA_TranslateBrowsePathsToNodeIdsRequest translateBrowsePathsToNodeIdsRequest;
+    UA_RegisterNodesRequest registerNodesRequest;
+    UA_UnregisterNodesRequest unregisterNodesRequest;
+    UA_ReadRequest readRequest;
+    UA_WriteRequest writeRequest;
+#ifdef UA_ENABLE_HISTORIZING
+    UA_HistoryReadRequest historyReadRequest;
+    UA_HistoryUpdateRequest historyUpdateRequest;
+#endif
+#ifdef UA_ENABLE_METHODCALLS
+    UA_CallRequest callRequest;
+#endif
+#ifdef UA_ENABLE_SUBSCRIPTIONS
+    UA_CreateMonitoredItemsRequest createMonitoredItemsRequest;
+    UA_DeleteMonitoredItemsRequest deleteMonitoredItemsRequest;
+    UA_ModifyMonitoredItemsRequest modifyMonitoredItemsRequest;
+    UA_SetMonitoringModeRequest setMonitoringModeRequest;
+    UA_CreateSubscriptionRequest createSubscriptionRequest;
+    UA_ModifySubscriptionRequest modifySubscriptionRequest;
+    UA_SetPublishingModeRequest setPublishingModeRequest;
+    UA_PublishRequest publishRequest;
+    UA_RepublishRequest republishRequest;
+    UA_DeleteSubscriptionsRequest deleteSubscriptionsRequest;
+#endif
+} UA_Request;
+
+typedef union {
+    UA_ResponseHeader responseHeader;
+    UA_FindServersResponse findServersResponse;
+    UA_GetEndpointsResponse getEndpointsResponse;
+#ifdef UA_ENABLE_DISCOVERY
+# ifdef UA_ENABLE_DISCOVERY_MULTICAST
+    UA_FindServersOnNetworkResponse findServersOnNetworkResponse;
+# endif
+    UA_RegisterServerResponse registerServerResponse;
+    UA_RegisterServer2Response registerServer2Response;
+#endif
+    UA_OpenSecureChannelResponse openSecureChannelResponse;
+    UA_CreateSessionResponse createSessionResponse;
+    UA_ActivateSessionResponse activateSessionResponse;
+    UA_CloseSessionResponse closeSessionResponse;
+    UA_AddNodesResponse addNodesResponse;
+    UA_AddReferencesResponse addReferencesResponse;
+    UA_DeleteNodesResponse deleteNodesResponse;
+    UA_DeleteReferencesResponse deleteReferencesResponse;
+    UA_BrowseResponse browseResponse;
+    UA_BrowseNextResponse browseNextResponse;
+    UA_TranslateBrowsePathsToNodeIdsResponse translateBrowsePathsToNodeIdsResponse;
+    UA_RegisterNodesResponse registerNodesResponse;
+    UA_UnregisterNodesResponse unregisterNodesResponse;
+    UA_ReadResponse readResponse;
+    UA_WriteResponse writeResponse;
+#ifdef UA_ENABLE_HISTORIZING
+    UA_HistoryReadResponse historyReadResponse;
+    UA_HistoryUpdateResponse historyUpdateResponse;
+#endif
+#ifdef UA_ENABLE_METHODCALLS
+    UA_CallResponse callResponse;
+#endif
+#ifdef UA_ENABLE_SUBSCRIPTIONS
+    UA_CreateMonitoredItemsResponse createMonitoredItemsResponse;
+    UA_DeleteMonitoredItemsResponse deleteMonitoredItemsResponse;
+    UA_ModifyMonitoredItemsResponse modifyMonitoredItemsResponse;
+    UA_SetMonitoringModeResponse setMonitoringModeResponse;
+    UA_CreateSubscriptionResponse createSubscriptionResponse;
+    UA_ModifySubscriptionResponse modifySubscriptionResponse;
+    UA_SetPublishingModeResponse setPublishingModeResponse;
+    UA_PublishResponse publishResponse;
+    UA_RepublishResponse republishResponse;
+    UA_DeleteSubscriptionsResponse deleteSubscriptionsResponse;
+#endif
+} UA_Response;
 
 typedef struct {
     UA_MonitoredItem monitoredItem;
@@ -137,7 +233,7 @@ struct UA_Server {
     UA_UInt32 lastLocalMonitoredItemId;
 
 #ifdef UA_ENABLE_SUBSCRIPTIONS_ALARMS_CONDITIONS
-    LIST_HEAD(conditionSourcelisthead, UA_ConditionSource_nodeListElement) headConditionSource;
+    LIST_HEAD(conditionSourcelisthead, UA_ConditionSource) headConditionSource;
 #endif//UA_ENABLE_SUBSCRIPTIONS_ALARMS_CONDITIONS
 
 #endif
@@ -289,7 +385,7 @@ writeWithSession(UA_Server *server, UA_Session *session,
 
 UA_StatusCode
 sendResponse(UA_SecureChannel *channel, UA_UInt32 requestId, UA_UInt32 requestHandle,
-             UA_ResponseHeader *responseHeader, const UA_DataType *responseType);
+             UA_Response *response, const UA_DataType *responseType);
 
 /* Many services come as an array of operations. This function generalizes the
  * processing of the operations. */

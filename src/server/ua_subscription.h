@@ -9,6 +9,7 @@
  *    Copyright 2017 (c) Florian Palm
  *    Copyright 2017 (c) Stefan Profanter, fortiss GmbH
  *    Copyright 2017 (c) Mattias Bornhager
+ *    Copyright 2019 (c) HMS Industrial Networks AB (Author: Jonas Green)
  */
 
 #ifndef UA_SUBSCRIPTION_H_
@@ -56,6 +57,7 @@ struct UA_MonitoredItem;
 typedef struct UA_MonitoredItem UA_MonitoredItem;
 
 #ifdef UA_ENABLE_SUBSCRIPTIONS_EVENTS
+
 typedef struct UA_EventNotification {
     UA_EventFieldList fields;
     /* EventFilterResult currently isn't being used
@@ -63,6 +65,7 @@ typedef struct UA_EventNotification {
 } UA_EventNotification;
 
 #ifdef UA_ENABLE_SUBSCRIPTIONS_ALARMS_CONDITIONS
+
 typedef enum {
   UA_INACTIVE,
   UA_ACTIVE,
@@ -72,49 +75,56 @@ typedef enum {
   UA_ACTIVE_LOWLOW
 } UA_ActiveState;
 
-typedef struct UA_SpecificCallbacks_Data {
-    UA_TwoStateVariableChangeCallback enteringEnabledStateCallback;
-    UA_TwoStateVariableChangeCallback enteringAckedStateCallback;
+typedef struct {
+    UA_TwoStateVariableChangeCallback enableStateCallback;
+    UA_TwoStateVariableChangeCallback ackStateCallback;
     UA_Boolean ackedRemoveBranch;
-    UA_TwoStateVariableChangeCallback enteringConfirmedStateCallback;
+    UA_TwoStateVariableChangeCallback confirmStateCallback;
     UA_Boolean confirmedRemoveBranch;
-    UA_TwoStateVariableChangeCallback enteringActiveStateCallback;
-} UA_SpecificCallbacks_Data;
+    UA_TwoStateVariableChangeCallback activeStateCallback;
+} UA_ConditionCallbacks;
 
-typedef struct UA_LastSverity_Data {
-    UA_UInt16 lastSeverity;
-    UA_DateTime sourceTimeStamp;
-} UA_LastSverity_Data;
-
-/* in the first implementation there will be only one entry in this list
- * conditionBranchId is always NULL.
+/*
+ * In Alarms and Conditions first implementation, conditionBranchId
+ * is always equal to NULL NodeId (UA_NODEID_NULL). That ConditionBranch
+ * represents the current state Condition. The current state is determined
+ * by the last Event triggered (lastEventId). See Part 9, 5.5.2, BranchId.
  */
-typedef struct UA_ConditionBranch_nodeListElement { 
-    LIST_ENTRY(UA_ConditionBranch_nodeListElement) listEntry;
-    UA_NodeId* conditionBranchId;
+typedef struct UA_ConditionBranch {
+    LIST_ENTRY(UA_ConditionBranch) listEntry;
+    UA_NodeId conditionBranchId;
     UA_ByteString lastEventId;
     UA_Boolean isCallerAC;
-} UA_ConditionBranch_nodeListElement;
+} UA_ConditionBranch;
 
-typedef struct UA_Condition_nodeListElement {
-    LIST_ENTRY(UA_Condition_nodeListElement) listEntry;
-    LIST_HEAD(conditionbranchlisthead, UA_ConditionBranch_nodeListElement) conditionBranchHead;
+/*
+ * In Alarms and Conditions first implementation, A Condition
+ * have only one ConditionBranch entry.
+ */
+typedef struct UA_Condition {
+    LIST_ENTRY(UA_Condition) listEntry;
+    LIST_HEAD(, UA_ConditionBranch) conditionBranchHead;
     UA_NodeId conditionId;
-    UA_LastSverity_Data lastSevertyData;
-    UA_SpecificCallbacks_Data specificCallbacksData;
+    UA_UInt16 lastSeverity;
+    UA_DateTime lastSeveritySourceTimeStamp;
+    UA_ConditionCallbacks callbacks;
     UA_ActiveState lastActiveState;
     UA_ActiveState currentActiveState;
     UA_Boolean isLimitAlarm;
-} UA_Condition_nodeListElement;
+} UA_Condition;
 
-typedef struct UA_ConditionSource_nodeListElement {
-    LIST_ENTRY(UA_ConditionSource_nodeListElement) listEntry;
-    LIST_HEAD(conditionlisthead, UA_Condition_nodeListElement) conditionHead;
+/*
+ * A ConditionSource can have multiple Conditions.
+ */
+typedef struct UA_ConditionSource {
+    LIST_ENTRY(UA_ConditionSource) listEntry;
+    LIST_HEAD(, UA_Condition) conditionHead;
     UA_NodeId conditionSourceId;
-} UA_ConditionSource_nodeListElement;
-#endif
+} UA_ConditionSource;
 
-#endif
+#endif /* UA_ENABLE_SUBSCRIPTIONS_ALARMS_CONDITIONS */
+
+#endif /* UA_ENABLE_SUBSCRIPTIONS_EVENTS */
 
 typedef struct UA_Notification {
     TAILQ_ENTRY(UA_Notification) listEntry; /* Notification list for the MonitoredItem */
@@ -304,6 +314,16 @@ UA_StatusCode UA_Subscription_removeRetransmissionMessage(UA_Subscription *sub,
                                                           UA_UInt32 sequenceNumber);
 void UA_Subscription_answerPublishRequestsNoSubscription(UA_Server *server, UA_Session *session);
 UA_Boolean UA_Subscription_reachedPublishReqLimit(UA_Server *server,  UA_Session *session);
+
+#ifdef UA_ENABLE_SUBSCRIPTIONS_EVENTS
+
+/* Only for unit testing */
+UA_StatusCode
+UA_Server_evaluateWhereClauseContentFilter(
+    UA_Server *server,
+    const UA_NodeId *eventNode,
+    const UA_ContentFilter *contentFilter);
+#endif /* UA_ENABLE_SUBSCRIPTIONS_EVENTS */
 
 #endif /* UA_ENABLE_SUBSCRIPTIONS */
 

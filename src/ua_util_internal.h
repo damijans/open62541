@@ -26,7 +26,7 @@ _UA_BEGIN_DECLS
 /* Print a NodeId in logs */
 #define UA_LOG_NODEID_WRAP(NODEID, LOG) {   \
     UA_String nodeIdStr = UA_STRING_NULL;   \
-    UA_NodeId_toString(NODEID, &nodeIdStr); \
+    UA_NodeId_print(NODEID, &nodeIdStr);    \
     LOG;                                    \
     UA_String_clear(&nodeIdStr);            \
 }
@@ -48,6 +48,15 @@ typedef UA_StatusCode status;
 
 /* Utility Functions
  * ----------------- */
+
+/*
+ * Get the number of optional fields contained in an structure type.
+ *
+ * @param type the requested type
+ * @return number of optional fields
+ */
+size_t UA_EXPORT
+getCountOfOptionalFields(const UA_DataType *type);
 
 #ifdef UA_DEBUG_DUMP_PKGS
 void UA_EXPORT UA_dump_hex_pkg(UA_Byte* buffer, size_t bufferLen);
